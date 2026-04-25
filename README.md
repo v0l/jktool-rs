@@ -1,6 +1,6 @@
 # jktool-rs
 
-Rust implementation of [jktool](https://github.com/v0l/jktool) — a command-line tool for communicating with JIKONG (JK) Battery Management Systems.
+Rust implementation of [jktool](https://github.com/sshoecraft/jktool) — a command-line tool for communicating with JIKONG (JK) Battery Management Systems.
 
 Supports the JK02 (24S/32S) and JK04 protocol variants, with automatic detection based on the BMS model string. Provides a reusable library (`jk_bms`) and a CLI (`jktool`).
 
