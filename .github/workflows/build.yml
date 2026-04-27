@@ -56,7 +56,12 @@ jobs:
         if: matrix.cross
         run: |
           sudo apt-get update
-          sudo apt-get install -y crossbuild-essential-armhf crossbuild-essential-arm64 gcc-i686-linux-gnu pkg-config libdbus-1-dev libdbus-1-dev:armhf libdbus-1-dev:arm64 libdbus-1-dev:i386
+          sudo apt-get install -y crossbuild-essential-armhf crossbuild-essential-arm64 gcc-i686-linux-gnu pkg-config libdbus-1-dev
+          sudo dpkg --add-architecture armhf
+          sudo dpkg --add-architecture arm64
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev:armhf libdbus-1-dev:arm64 libdbus-1-dev:i386
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
