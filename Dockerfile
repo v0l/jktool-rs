@@ -1,5 +1,5 @@
 ARG TARGETARCH
-FROM --platform=linux/${TARGETARCH} rust:1.75-slim-trixie as builder
+FROM --platform=linux/${TARGETARCH} rust:trixie as builder
 
 # Install system dependencies including dbus
 RUN apt-get update && \
