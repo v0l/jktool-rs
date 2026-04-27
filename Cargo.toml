@@ -18,7 +18,7 @@ uuid = { version = "1", optional = true }
 futures-util = { version = "0.3", optional = true }
 
 [features]
-default = []
+default = ["bluetooth"]
 bluetooth = ["btleplug", "tokio", "uuid", "futures-util"]
 
 [lib]

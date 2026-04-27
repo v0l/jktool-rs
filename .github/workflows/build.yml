@@ -9,76 +9,49 @@ env:
 
 jobs:
   build:
-    name: Build for ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
+    name: Build for ${{ matrix.arch }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          # x86_64 targets
-          - os: ubuntu-latest
+          - arch: x86_64
             target: x86_64-unknown-linux-gnu
             name: linux-x86_64
-          
-          # ARM targets (including armv7l like your example)
-          - os: ubuntu-latest
+          - arch: armv7
             target: armv7-unknown-linux-gnueabihf
             name: linux-armv7
-            cross: true
-            
-          - os: ubuntu-latest
-            target: arm-unknown-linux-gnueabihf
-            name: linux-arm
-            cross: true
-          
-          # ARM64 targets
-          - os: ubuntu-latest
+          - arch: arm64
             target: aarch64-unknown-linux-gnu
             name: linux-aarch64
-            cross: true
-          
-          # Additional architectures
-          - os: ubuntu-latest
+          - arch: i686
             target: i686-unknown-linux-gnu
             name: linux-i686
-            cross: true
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and extract binary
+        uses: docker/build-push-action@v5
         with:
-          targets: ${{ matrix.target }}
-
-      - name: Install cross compilation tools
-        if: matrix.cross
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y crossbuild-essential-armhf crossbuild-essential-arm64 gcc-i686-linux-gnu pkg-config libdbus-1-dev
-          sudo dpkg --add-architecture armhf
-          sudo dpkg --add-architecture arm64
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev:armhf libdbus-1-dev:arm64 libdbus-1-dev:i386
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build
-        run: |
-          cargo build --release --target ${{ matrix.target }} --features bluetooth
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          targets: jktool
+          build-args: |
+            TARGET=${{ matrix.target }}
+          outputs: type=local,dest=./output-${{ matrix.name }}
 
       - name: Rename binary
         run: |
-          cp target/${{ matrix.target }}/release/jktool jktool-${{ matrix.name }}
+          mkdir -p ./output-${{ matrix.name }}
+          cp ./output-${{ matrix.name }}/jktool ./jktool-${{ matrix.name }} || cp ./output-${{ matrix.name }}/target/*/release/jktool ./jktool-${{ matrix.name }} || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
