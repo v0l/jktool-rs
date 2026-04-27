@@ -1,0 +1,83 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build for ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86_64 targets
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+          
+          # ARM targets (including armv7l like your example)
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            name: linux-armv7
+            cross: true
+            
+          - os: ubuntu-latest
+            target: arm-unknown-linux-gnueabihf
+            name: linux-arm
+            cross: true
+          
+          # ARM64 targets
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            name: linux-aarch64
+            cross: true
+          
+          # Additional architectures
+          - os: ubuntu-latest
+            target: i686-unknown-linux-gnu
+            name: linux-i686
+            cross: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross compilation tools
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y crossbuild-essential-armhf crossbuild-essential-arm64 crossbuild-essential-i686
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: |
+          cargo build --release --target ${{ matrix.target }} --features bluetooth
+
+      - name: Rename binary
+        run: |
+          cp target/${{ matrix.target }}/release/jktool jktool-${{ matrix.name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jktool-${{ matrix.name }}
+          path: jktool-${{ matrix.name }}
+          retention-days: 30
