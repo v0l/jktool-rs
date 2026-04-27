@@ -55,10 +55,10 @@ impl CanTransport {
         let if_index = unsafe {
             let mut ifreq: libc::ifreq = std::mem::zeroed();
             let name_bytes = self.interface.as_bytes();
-            // Copy bytes and convert to i8 (ifreq.ifr_name is [i8; IFNAMSIZ])
+            // Copy bytes - ifreq.ifr_name type varies by architecture
             for (i, &b) in name_bytes.iter().enumerate() {
                 if i < libc::IFNAMSIZ {
-                    ifreq.ifr_name[i] = b as i8;
+                    ifreq.ifr_name[i] = b as _;
                 }
             }
             

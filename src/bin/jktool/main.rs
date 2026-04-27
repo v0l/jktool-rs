@@ -466,7 +466,7 @@ fn scan_can_bus(interface: &str, broadcast_ids: &[u32], timeout_secs: u64) -> Ve
         let name_bytes = interface.as_bytes();
         for (i, &b) in name_bytes.iter().enumerate() {
             if i < libc::IFNAMSIZ {
-                ifreq.ifr_name[i] = b as i8;
+                ifreq.ifr_name[i] = b as _;
             }
         }
 
