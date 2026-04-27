@@ -1,6 +1,6 @@
 ARG TARGETARCH
 
-FROM --platform=linux/${TARGETARCH} rust:1.75-bullseye as builder
+FROM --platform=linux/${TARGETARCH} rust:bullseye as builder
 
 # Install system dependencies
 RUN apt-get update && \
