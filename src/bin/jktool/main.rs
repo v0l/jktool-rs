@@ -1184,3 +1184,4 @@ fn format_settings_json(s: &jk_bms::JkSettings, version: &ProtocolVersion, prett
         serde_json::to_string(&obj).unwrap_or_else(|_| "{}".to_string())
     }
 }
+

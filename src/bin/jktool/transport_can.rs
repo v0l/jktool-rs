@@ -32,12 +32,11 @@ impl CanTransport {
     }
 
     pub fn from_target(target: &str) -> Result<Self> {
-        // Parse format: can:/dev/can0,0x18ff0000,0x18fe0000
-        // or: can:can0,0x18ff0000,0x18fe0000
+        // Parse format: can:can0,0x18ff0000,0x18fe0000
         let parts: Vec<&str> = target.split(',').collect();
         if parts.len() < 3 {
             return Err(JkError::TransportError(
-                "Invalid CAN target format. Use: can:/dev/can0,rx_id,tx_id".to_string()
+                "Invalid CAN target format. Use: can:can0,rx_id,tx_id".to_string()
             ));
         }
 
@@ -66,7 +65,7 @@ impl CanTransport {
         let if_index = unsafe {
             let mut ifreq: libc::ifreq = std::mem::zeroed();
             let name_bytes = self.interface.as_bytes();
-            // Copy bytes - ifreq.ifr_name type varies by architecture
+            // Copy bytes - type varies by architecture
             for (i, &b) in name_bytes.iter().enumerate() {
                 if i < libc::IFNAMSIZ {
                     ifreq.ifr_name[i] = b as _;
@@ -88,7 +87,6 @@ impl CanTransport {
                 )));
             }
             
-            // Access ifru_ifindex from the union
             ifreq.ifr_ifru.ifru_ifindex
         };
 
@@ -100,7 +98,7 @@ impl CanTransport {
             )));
         }
 
-        // Bind to CAN interface instead of connect
+        // Bind to CAN interface
         #[repr(C)]
         struct SockaddrCan {
             sa_family: u16,
@@ -168,11 +166,7 @@ impl CanTransport {
     fn write_can(&mut self, frame: &CanFrame) -> Result<usize> {
         if let Some(fd) = self.fd {
             let bytes_written = unsafe {
-                libc::write(
-                    fd,
-                    &frame as *const _ as *const libc::c_void,
-                    std::mem::size_of::<CanFrame>()
-                )
+                libc::write(fd, &frame as *const _ as *const libc::c_void, std::mem::size_of::<CanFrame>())
             };
 
             if bytes_written < 0 {
@@ -188,17 +182,13 @@ impl CanTransport {
     fn read_can(&mut self, frame: &mut CanFrame) -> Result<usize> {
         if let Some(fd) = self.fd {
             let bytes_read = unsafe {
-                libc::read(
-                    fd,
-                    frame as *mut _ as *mut libc::c_void,
-                    std::mem::size_of::<CanFrame>()
-                )
+                libc::read(fd, frame as *mut _ as *mut libc::c_void, std::mem::size_of::<CanFrame>())
             };
 
             if bytes_read < 0 {
                 let err = errno();
                 if err == libc::EAGAIN || err == libc::EWOULDBLOCK {
-                    return Ok(0); // No data available
+                    return Ok(0);
                 }
                 return Err(JkError::ReadFailed(err));
             }
@@ -218,11 +208,9 @@ impl Transport for CanTransport {
     fn open(&mut self) -> Result<()> {
         let fd = self.open_socket()?;
         
-        // Bring up the CAN interface (may need root privileges)
+        // Try to bring up the interface (may need root)
         use std::process::Command;
-        let _ = Command::new("ip")
-            .args(["link", "set", &self.interface, "up"])
-            .output();
+        let _ = Command::new("ip").args(["link", "set", &self.interface, "up"]).output();
             
         self.fd = Some(fd);
         log::info!("CAN transport opened on {} with RX=0x{:07X}, TX=0x{:07X}", 
@@ -243,11 +231,7 @@ impl Transport for CanTransport {
             return Err(JkError::TransportNotInitialized);
         }
 
-        // JK BMS CAN protocol uses standard 8-byte CAN frames
-        // We may need to fragment larger messages
         if data.len() > 8 {
-            // For now, just send the first 8 bytes
-            // In a full implementation, we'd implement CAN multi-frame protocol
             log::warn!("CAN frame too large ({} bytes), truncating to 8 bytes", data.len());
         }
 
@@ -270,11 +254,7 @@ impl Transport for CanTransport {
             return Err(JkError::TransportNotInitialized);
         }
 
-        let mut frame = CanFrame {
-            can_id: 0,
-            data: [0u8; 8],
-            len: 0,
-        };
+        let mut frame = CanFrame { can_id: 0, data: [0u8; 8], len: 0 };
 
         let start = std::time::Instant::now();
         let mut total = 0;
@@ -282,7 +262,6 @@ impl Transport for CanTransport {
         while total < buf.len() && start.elapsed() < Duration::from_secs(3) {
             match self.read_can(&mut frame) {
                 Ok(0) => {
-                    // No data, wait a bit
                     std::thread::sleep(Duration::from_millis(10));
                     continue;
                 }
@@ -291,9 +270,6 @@ impl Transport for CanTransport {
                         let copy_len = frame.len as usize;
                         buf[total..total + copy_len].copy_from_slice(&frame.data[..copy_len]);
                         total += copy_len;
-                        
-                        // For CAN, we typically get one frame at a time
-                        // Break after receiving one complete frame
                         break;
                     }
                 }
@@ -315,20 +291,20 @@ mod tests {
 
     #[test]
     fn test_can_transport_parsing() {
-        let transport = CanTransport::from_target("can:/dev/can0,0x18ff0000,0x18fe0000");
+        let transport = CanTransport::from_target("can:can0,0x18ff0000,0x18fe0000");
         assert!(transport.is_ok());
         let t = transport.unwrap();
-        assert_eq!(t.interface, "/dev/can0");
+        assert_eq!(t.interface, "can0");
         assert_eq!(t.rx_id, 0x18ff0000);
         assert_eq!(t.tx_id, 0x18fe0000);
     }
 
     #[test]
     fn test_can_transport_parsing_without_dev() {
-        let transport = CanTransport::from_target("can:can0,0x18ff0000,0x18fe0000");
+        let transport = CanTransport::from_target("can:/dev/can0,0x18ff0000,0x18fe0000");
         assert!(transport.is_ok());
         let t = transport.unwrap();
-        assert_eq!(t.interface, "can0");
+        assert_eq!(t.interface, "/dev/can0");
     }
 
     #[test]
