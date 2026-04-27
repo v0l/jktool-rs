@@ -51,6 +51,17 @@ impl CanTransport {
     }
 
     fn open_socket(&self) -> Result<RawFd> {
+        // Create CAN socket
+        let fd = unsafe {
+            libc::socket(libc::AF_CAN, libc::SOCK_RAW, libc::CAN_RAW)
+        };
+
+        if fd < 0 {
+            return Err(JkError::TransportError(format!(
+                "Failed to create CAN socket: errno {}", errno()
+            )));
+        }
+
         // Get interface index using ioctl
         let if_index = unsafe {
             let mut ifreq: libc::ifreq = std::mem::zeroed();
@@ -82,24 +93,14 @@ impl CanTransport {
         };
 
         if if_index < 0 {
+            unsafe { libc::close(fd); }
             return Err(JkError::TransportError(format!(
                 "Failed to get interface index for {}: invalid index",
                 self.interface
             )));
         }
 
-        // Create CAN socket
-        let fd = unsafe {
-            libc::socket(libc::AF_CAN, libc::SOCK_RAW, libc::CAN_RAW)
-        };
-
-        if fd < 0 {
-            return Err(JkError::TransportError(format!(
-                "Failed to create CAN socket: errno {}", errno()
-            )));
-        }
-
-        // Create sockaddr_can
+        // Bind to CAN interface instead of connect
         #[repr(C)]
         struct SockaddrCan {
             sa_family: u16,
@@ -114,7 +115,7 @@ impl CanTransport {
         };
 
         let ret = unsafe {
-            libc::connect(
+            libc::bind(
                 fd,
                 &sockaddr as *const _ as *const libc::sockaddr,
                 std::mem::size_of::<SockaddrCan>() as libc::socklen_t,
@@ -124,7 +125,7 @@ impl CanTransport {
         if ret < 0 {
             unsafe { libc::close(fd); }
             return Err(JkError::TransportError(format!(
-                "Failed to connect CAN socket to {}: errno {}",
+                "Failed to bind CAN socket to {}: errno {}",
                 self.interface, errno()
             )));
         }

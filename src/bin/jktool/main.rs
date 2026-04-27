@@ -490,7 +490,7 @@ fn scan_can_bus(interface: &str, broadcast_ids: &[u32], timeout_secs: u64) -> Ve
         return discovered;
     }
 
-    // Connect to interface
+    // Connect to interface using bind instead of connect
     #[repr(C)]
     struct SockaddrCan {
         sa_family: u16,
@@ -505,7 +505,7 @@ fn scan_can_bus(interface: &str, broadcast_ids: &[u32], timeout_secs: u64) -> Ve
     };
 
     let ret = unsafe {
-        libc::connect(
+        libc::bind(
             fd,
             &sockaddr as *const _ as *const libc::sockaddr,
             std::mem::size_of::<SockaddrCan>() as libc::socklen_t,
@@ -513,7 +513,7 @@ fn scan_can_bus(interface: &str, broadcast_ids: &[u32], timeout_secs: u64) -> Ve
     };
 
     if ret < 0 {
-        eprintln!("Failed to connect CAN socket: {}", std::io::Error::last_os_error());
+        eprintln!("Failed to bind CAN socket: {}", std::io::Error::last_os_error());
         unsafe { libc::close(fd); };
         return discovered;
     }
