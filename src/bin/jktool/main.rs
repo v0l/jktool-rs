@@ -71,6 +71,16 @@ enum Commands {
     /// Scan for Bluetooth devices
     #[cfg(feature = "bluetooth")]
     Scan,
+
+    /// Scan for JK BMS devices on CAN bus
+    ScanCan {
+        /// CAN interface to use (e.g., can0)
+        #[arg(short, long, default_value = "can0")]
+        interface: String,
+        /// Timeout in seconds for scanning
+        #[arg(short, long, default_value = "5")]
+        timeout: u64,
+    },
 }
 
 fn main() {
@@ -105,6 +115,12 @@ fn main() {
     // List-settings doesn't need a transport
     if matches!(command, Commands::ListSettings) {
         list_settings(&cli);
+        return;
+    }
+
+    // CAN scan doesn't need a full session
+    if matches!(command, Commands::ScanCan { .. }) {
+        handle_can_scan(&cli, &command);
         return;
     }
 
@@ -219,6 +235,7 @@ fn main() {
         }
         #[cfg(feature = "bluetooth")]
         Commands::Scan => { unreachable!() }
+        Commands::ScanCan { .. } => { unreachable!() }
         Commands::ListSettings => { unreachable!() }
     }
 
@@ -340,6 +357,317 @@ fn do_read(session: &mut jk_bms::JkSession, pack: &mut MybmmPack, cli: &Cli, nee
     }
 
     JkInfo::from_pack(pack)
+}
+
+fn handle_can_scan(_cli: &Cli, command: &Commands) {
+    let timeout = if let Commands::ScanCan { timeout, .. } = command {
+        *timeout
+    } else {
+        5
+    };
+
+    let interface = if let Commands::ScanCan { interface, .. } = command {
+        interface.clone()
+    } else {
+        "can0".to_string()
+    };
+
+    println!("Scanning for JK BMS devices on {}...", interface);
+    println!("Timeout: {} seconds", timeout);
+    println!();
+
+    // Common JK BMS CAN broadcast ID (0x18FE0000 is typical for requests)
+    // We'll try multiple common IDs and listen for responses
+    let broadcast_ids = [
+        0x18FE0000, // Standard broadcast request
+        0x18FF0000, // Alternative broadcast
+        0x00000000, // Zero ID (some devices)
+    ];
+
+    let discovered_devices = scan_can_bus(&interface, &broadcast_ids, timeout);
+
+    if discovered_devices.is_empty() {
+        println!("No JK BMS devices found on CAN bus.");
+        println!();
+        println!("Tips:");
+        println!("  - Ensure CAN interface is up: sudo ip link set {} up", interface);
+        println!("  - Check CAN bitrate: sudo ip link show {}", interface);
+        println!("  - Verify physical CAN bus connection");
+    } else {
+        println!("Found {} JK BMS device(s):", discovered_devices.len());
+        println!();
+        for (i, device) in discovered_devices.iter().enumerate() {
+            println!("  Device {}:", i + 1);
+            println!("    RX ID (BMS->Host): 0x{:08X}", device.rx_id);
+            println!("    TX ID (Host->BMS): 0x{:08X}", device.tx_id);
+            if !device.model.is_empty() {
+                println!("    Model: {}", device.model);
+            }
+            if !device.hwvers.is_empty() {
+                println!("    Hardware: {}", device.hwvers);
+            }
+            if !device.swvers.is_empty() {
+                println!("    Software: {}", device.swvers);
+            }
+            println!();
+        }
+        println!("Usage:");
+        for device in &discovered_devices {
+            println!(
+                "  jktool -t can:{},0x{:08X},0x{:08X} read",
+                interface, device.rx_id, device.tx_id
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CanDevice {
+    rx_id: u32,
+    tx_id: u32,
+    model: String,
+    hwvers: String,
+    swvers: String,
+}
+
+fn scan_can_bus(interface: &str, broadcast_ids: &[u32], timeout_secs: u64) -> Vec<CanDevice> {
+    use std::process::Command;
+    use std::time::Duration;
+
+    // Common JK BMS response ID patterns
+    // JK BMS typically uses paired IDs: 0x18FE0000 (TX) <-> 0x18FF0000 (RX)
+    let _known_pairs = [
+        (0x18FF0000, 0x18FE0000), // Standard pair
+        (0x18FF0001, 0x18FE0001), // Alternative
+        (0x00000000, 0x00000001), // Generic
+    ];
+
+    let mut discovered = Vec::new();
+    let mut seen_rx_ids = std::collections::HashSet::new();
+
+    // Try to bring up the interface
+    let _ = Command::new("ip")
+        .args(["link", "set", interface, "up"])
+        .output();
+
+    // Create CAN socket
+    let fd = unsafe {
+        libc::socket(libc::AF_CAN, libc::SOCK_RAW, libc::CAN_RAW)
+    };
+
+    if fd < 0 {
+        eprintln!("Failed to create CAN socket: {}", std::io::Error::last_os_error());
+        return discovered;
+    }
+
+    // Get interface index
+    let if_index = unsafe {
+        let mut ifreq: libc::ifreq = std::mem::zeroed();
+        let name_bytes = interface.as_bytes();
+        for (i, &b) in name_bytes.iter().enumerate() {
+            if i < libc::IFNAMSIZ {
+                ifreq.ifr_name[i] = b as i8;
+            }
+        }
+
+        let test_fd = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+        if test_fd < 0 {
+            -1
+        } else {
+            let ret = libc::ioctl(test_fd, libc::SIOCGIFINDEX, &mut ifreq);
+            libc::close(test_fd);
+            if ret < 0 {
+                -1
+            } else {
+                ifreq.ifr_ifru.ifru_ifindex
+            }
+        }
+    };
+
+    if if_index < 0 {
+        eprintln!("Failed to get interface index for {}", interface);
+        unsafe { libc::close(fd); };
+        return discovered;
+    }
+
+    // Connect to interface
+    #[repr(C)]
+    struct SockaddrCan {
+        sa_family: u16,
+        can_ifindex: i32,
+        _pad: [u8; 8],
+    }
+
+    let sockaddr = SockaddrCan {
+        sa_family: libc::AF_CAN as u16,
+        can_ifindex: if_index,
+        _pad: [0; 8],
+    };
+
+    let ret = unsafe {
+        libc::connect(
+            fd,
+            &sockaddr as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<SockaddrCan>() as libc::socklen_t,
+        )
+    };
+
+    if ret < 0 {
+        eprintln!("Failed to connect CAN socket: {}", std::io::Error::last_os_error());
+        unsafe { libc::close(fd); };
+        return discovered;
+    }
+
+    // Set non-blocking
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
+    unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+
+    // Set RX filter to receive all messages
+    let filter = libc::can_filter {
+        can_id: 0,
+        can_mask: 0,
+    };
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_CAN_BASE,
+            libc::CAN_RAW_FILTER,
+            &filter as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::can_filter>() as libc::socklen_t,
+        )
+    };
+
+    #[repr(C)]
+    struct CanFrame {
+        can_id: u32,
+        data: [u8; 8],
+        len: u8,
+    }
+
+    // Send broadcast requests
+    for &bcast_id in broadcast_ids {
+        if bcast_id == 0 {
+            continue;
+        }
+
+        let cmd_frame = get_can_info_command();
+        let frame = CanFrame {
+            can_id: bcast_id,
+            data: cmd_frame,
+            len: 8,
+        };
+
+        let _ = unsafe {
+            libc::write(
+                fd,
+                &frame as *const _ as *const libc::c_void,
+                std::mem::size_of::<CanFrame>(),
+            )
+        };
+
+        // Small delay between broadcasts
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Listen for responses
+    let start = std::time::Instant::now();
+    let _response_buffer = vec![0u8; 2048];
+
+    while start.elapsed() < Duration::from_secs(timeout_secs) {
+        let mut frame = CanFrame {
+            can_id: 0,
+            data: [0u8; 8],
+            len: 0,
+        };
+
+        let bytes_read = unsafe {
+            libc::read(
+                fd,
+                &mut frame as *mut _ as *mut libc::c_void,
+                std::mem::size_of::<CanFrame>(),
+            )
+        };
+
+        if bytes_read > 0 && frame.len > 0 {
+            // Check if this is a JK BMS response (starts with 0x55 0xAA 0xEB 0x90)
+            if frame.len >= 4
+                && frame.data[0] == 0x55
+                && frame.data[1] == 0xAA
+                && frame.data[2] == 0xEB
+                && frame.data[3] == 0x90
+            {
+                let rx_id = frame.can_id;
+                if !seen_rx_ids.contains(&rx_id) {
+                    seen_rx_ids.insert(rx_id);
+
+                    // Calculate TX ID (typically RX - 0x1000000 or similar pattern)
+                    let tx_id = if rx_id >= 0x1000000 {
+                        rx_id - 0x1000000
+                    } else {
+                        rx_id + 1 // Fallback
+                    };
+
+                    // Try to get device info by sending a request
+                    let info_cmd = get_can_info_command();
+                    let req_frame = CanFrame {
+                        can_id: tx_id,
+                        data: info_cmd,
+                        len: 8,
+                    };
+
+                    let _ = unsafe {
+                        libc::write(
+                            fd,
+                            &req_frame as *const _ as *const libc::c_void,
+                            std::mem::size_of::<CanFrame>(),
+                        )
+                    };
+
+                    // Wait for response and parse
+                    std::thread::sleep(Duration::from_millis(200));
+
+                    let mut info_buf = vec![0u8; 2048];
+                    let info_read = unsafe {
+                        libc::read(
+                            fd,
+                            info_buf.as_mut_ptr() as *mut libc::c_void,
+                            info_buf.len(),
+                        )
+                    };
+
+                    let mut model = String::new();
+                    let mut hwvers = String::new();
+                    let mut swvers = String::new();
+
+                    if info_read > 0 {
+                        // Try to parse as JK info frame
+                        let mut pack = jk_bms::MybmmPack::new("scan");
+                        let flags = jk_bms::getdata(&mut pack, &info_buf[..info_read as usize]);
+                        if flags.got_info && !pack.model.is_empty() {
+                            model = pack.model.clone();
+                            hwvers = pack.hwvers.clone();
+                            swvers = pack.swvers.clone();
+                        }
+                    }
+
+                    discovered.push(CanDevice {
+                        rx_id,
+                        tx_id,
+                        model,
+                        hwvers,
+                        swvers,
+                    });
+
+                    println!("  Found device at RX=0x{:08X}, TX=0x{:08X}", rx_id, tx_id);
+                }
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    unsafe { libc::close(fd); };
+    discovered
 }
 
 fn list_settings(cli: &Cli) {
