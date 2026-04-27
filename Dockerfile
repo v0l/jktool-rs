@@ -1,24 +1,30 @@
 ARG TARGETARCH
-FROM --platform=linux/${TARGETARCH} rust:trixie as builder
 
-# Install system dependencies including dbus
+FROM --platform=linux/${TARGETARCH} rust:1.75-bullseye as builder
+
+# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     pkg-config \
     libdbus-1-dev \
-    clang \
-    llvm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
 # Copy manifest files first for better caching
 COPY Cargo.toml Cargo.lock ./
+
+# Create dummy source to cache dependencies
+RUN mkdir -p src && \
+    echo "pub fn dummy() {}" > src/lib.rs && \
+    cargo build --release --features bluetooth 2>&1 || true
+
+# Copy actual source
 COPY src/ ./src/
 
-# Build the binary
-RUN cargo build --release --features bluetooth
+# Build with static linking
+RUN RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --features bluetooth
 
-# Extract the binary
+# Extract the statically linked binary
 RUN mkdir -p /output && \
     cp /build/target/release/jktool /output/
