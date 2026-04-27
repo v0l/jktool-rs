@@ -22,9 +22,9 @@ RUN mkdir -p src && \
 # Copy actual source
 COPY src/ ./src/
 
-# Build with static linking
-RUN RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --features bluetooth
+# Build (without static linking due to proc-macro incompatibility)
+RUN cargo build --release --features bluetooth
 
-# Extract the statically linked binary
+# Extract the binary
 RUN mkdir -p /output && \
     cp /build/target/release/jktool /output/
