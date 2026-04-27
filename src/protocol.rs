@@ -877,3 +877,85 @@ pub fn get_settings_command() -> [u8; 20] {
     [0xaa, 0x55, 0x90, 0xeb, 0x96, 0x00, 0x00, 0x00, 0x00, 0x00,
      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10]
 }
+
+// ===========================================================================
+// CAN Protocol Support
+// ===========================================================================
+
+/// CAN frame sizes for JK BMS
+/// JK BMS CAN protocol uses 8-byte frames (standard CAN MTU)
+pub const CAN_FRAME_SIZE: usize = 8;
+
+/// JK BMS CAN command header
+/// CAN frames start with command byte, followed by data
+pub const CAN_CMD_INFO: u8 = 0x97;
+pub const CAN_CMD_CELL_INFO: u8 = 0x96;
+pub const CAN_CMD_WRITE_REG: u8 = 0x05;
+
+/// Build a CAN command frame for JK BMS.
+/// CAN frames are 8 bytes: [cmd][data...][padding]
+pub fn build_can_command(cmd: u8, data: &[u8]) -> [u8; 8] {
+    let mut frame = [0u8; 8];
+    frame[0] = cmd;
+    let len = data.len().min(7);
+    frame[1..1 + len].copy_from_slice(&data[..len]);
+    frame
+}
+
+/// Get info command for CAN (8 bytes)
+pub fn get_can_info_command() -> [u8; 8] {
+    build_can_command(CAN_CMD_INFO, &[])
+}
+
+/// Get cell info command for CAN (8 bytes)
+pub fn get_can_cell_info_command() -> [u8; 8] {
+    build_can_command(CAN_CMD_CELL_INFO, &[])
+}
+
+/// Build a CAN write register command
+/// Format: [0x05][register][length][value_bytes...][padding]
+pub fn build_can_write_frame(register: u8, value: u32, length: u8) -> [u8; 8] {
+    let mut frame = [0u8; 8];
+    frame[0] = CAN_CMD_WRITE_REG;
+    frame[1] = register;
+    frame[2] = length;
+    
+    // Value is sent as little-endian bytes
+    let value_bytes = value.to_le_bytes();
+    let copy_len = (length.min(5) as usize).min(5); // Max 5 bytes for value (8 - 3 header bytes)
+    frame[3..3 + copy_len].copy_from_slice(&value_bytes[..copy_len]);
+    
+    frame
+}
+
+/// Build a CAN setting write frame
+pub fn build_can_setting_write_frame(name: &str, value: &str, version: ProtocolVersion) -> Option<[u8; 8]> {
+    let def = get_setting_def(name)?;
+    
+    let idx = match version {
+        ProtocolVersion::Jk04 => 0,
+        ProtocolVersion::Jk02_24S => 1,
+        ProtocolVersion::Jk02_32S => 2,
+    };
+    
+    let register = def.registers[idx];
+    if register == 0 {
+        return None;
+    }
+    
+    let raw_value: u32 = if def.is_switch {
+        let b = value.parse::<bool>().unwrap_or_else(|_| {
+            match value.to_lowercase().as_str() {
+                "1" | "on" | "true" | "yes" => true,
+                "0" | "off" | "false" | "no" => false,
+                _ => false,
+            }
+        });
+        if b { 1 } else { 0 }
+    } else {
+        let v: f32 = value.parse().ok()?;
+        (v * def.factor) as i32 as u32
+    };
+    
+    Some(build_can_write_frame(register, raw_value, def.length))
+}

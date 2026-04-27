@@ -1,10 +1,13 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use jk_bms::{MybmmPack, MybmmModule, Transport, JkInfo, FrameAssembler, ProtocolVersion};
-use jk_bms::{get_info_command, get_cell_info_command};
-use jk_bms::{SETTINGS, build_setting_write_frame};
+use jk_bms::{get_info_command, get_cell_info_command, get_can_info_command, get_can_cell_info_command};
+use jk_bms::{SETTINGS, build_setting_write_frame, build_can_setting_write_frame};
 
 mod transport_serial;
 use transport_serial::SerialTransport;
+
+mod transport_can;
+use transport_can::CanTransport;
 
 #[cfg(feature = "bluetooth")]
 mod transport_bt;
@@ -15,7 +18,7 @@ use transport_bt::BluetoothTransport;
 #[command(name = "jktool")]
 #[command(about = "JK BMS command-line tool")]
 struct Cli {
-    /// Transport:target, e.g. serial:/dev/ttyUSB0,9600 or bt:01:02:03:04:05:06,ffe1
+    /// Transport:target, e.g. serial:/dev/ttyUSB0,9600 or bt:01:02:03:04:05:06,ffe1 or can:can0,0x18ff0000,0x18fe0000
     #[arg(short, long)]
     transport: Option<String>,
 
@@ -155,13 +158,28 @@ fn main() {
             // First do a read to detect protocol version
             let _info = do_read(&mut session, &mut pack, &cli, false);
 
-            let frame = match build_setting_write_frame(&name, &value, pack.protocol_version) {
-                Some(f) => f,
-                None => {
-                    eprintln!("Unknown or unsupported setting: '{}' for protocol {:?}", name, pack.protocol_version);
-                    eprintln!("Use 'list-settings' to see supported settings.");
-                    let _ = session.close();
-                    std::process::exit(1);
+            // Determine if using CAN transport
+            let is_can = pack.transport == "can";
+            
+            let frame: Vec<u8> = if is_can {
+                match build_can_setting_write_frame(&name, &value, pack.protocol_version) {
+                    Some(f) => f.to_vec(),
+                    None => {
+                        eprintln!("Unknown or unsupported setting: '{}' for protocol {:?}", name, pack.protocol_version);
+                        eprintln!("Use 'list-settings' to see supported settings.");
+                        let _ = session.close();
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                match build_setting_write_frame(&name, &value, pack.protocol_version) {
+                    Some(f) => f.to_vec(),
+                    None => {
+                        eprintln!("Unknown or unsupported setting: '{}' for protocol {:?}", name, pack.protocol_version);
+                        eprintln!("Use 'list-settings' to see supported settings.");
+                        let _ = session.close();
+                        std::process::exit(1);
+                    }
                 }
             };
 
@@ -211,9 +229,18 @@ fn do_read(session: &mut jk_bms::JkSession, pack: &mut MybmmPack, cli: &Cli, nee
     let mut data_buf = vec![0u8; 2048];
     let mut assembler = FrameAssembler::new();
     let mut retries = 5;
+    
+    // Determine if we're using CAN transport
+    let is_can = session.tp_handle.as_ref()
+        .map(|_| pack.transport == "can")
+        .unwrap_or(false);
 
     // Phase 1: send getInfo, parse info response
-    let info_cmd = get_info_command();
+    let info_cmd = if is_can {
+        get_can_info_command().to_vec()
+    } else {
+        get_info_command().to_vec()
+    };
     let mut _got_info = false;
     while retries > 0 {
         if let Some(ref mut handle) = session.tp_handle {
@@ -253,7 +280,11 @@ fn do_read(session: &mut jk_bms::JkSession, pack: &mut MybmmPack, cli: &Cli, nee
     }
 
     // Phase 2: send getCellInfo, parse voltage + settings data
-    let cell_cmd = get_cell_info_command();
+    let cell_cmd = if is_can {
+        get_can_cell_info_command().to_vec()
+    } else {
+        get_cell_info_command().to_vec()
+    };
     let mut got_volt = false;
     let mut got_settings = pack.settings.is_some();
     retries = 5;
@@ -383,6 +414,7 @@ fn parse_transport(spec: &str) -> (&str, &str) {
 fn create_session(pack: &MybmmPack, _module: &MybmmModule) -> jk_bms::Result<jk_bms::JkSession> {
     let transport: Box<dyn Transport> = match pack.transport.as_str() {
         "serial" => Box::new(SerialTransport::from_target(&pack.target)),
+        "can" => Box::new(CanTransport::from_target(&pack.target)?),
         #[cfg(feature = "bluetooth")]
         "bt" => Box::new(BluetoothTransport::from_target(&pack.target)),
         _ => {

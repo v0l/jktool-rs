@@ -7,7 +7,7 @@ pub mod jk_info;
 
 pub use error::{JkError, Result};
 pub use pack::{MybmmPack, ProtocolVersion, JkSettings};
-pub use protocol::{getdata, get_info_command, get_cell_info_command, get_settings_command, get_short, get_signed_short, crc, error_bitmask_to_strings, ERROR_DESCRIPTIONS, FrameAssembler, ParseFlags, get_16bit, get_32bit, ieee_float, SettingDef, SETTINGS, get_setting_register, get_setting_def, get_setting_by_register, build_write_frame, build_setting_write_frame};
+pub use protocol::{getdata, get_info_command, get_cell_info_command, get_settings_command, get_short, get_signed_short, crc, error_bitmask_to_strings, ERROR_DESCRIPTIONS, FrameAssembler, ParseFlags, get_16bit, get_32bit, ieee_float, SettingDef, SETTINGS, get_setting_register, get_setting_def, get_setting_by_register, build_write_frame, build_setting_write_frame, CAN_FRAME_SIZE, CAN_CMD_INFO, CAN_CMD_CELL_INFO, CAN_CMD_WRITE_REG, build_can_command, get_can_info_command, get_can_cell_info_command, build_can_write_frame, build_can_setting_write_frame};
 pub use session::JkSession;
 pub use module::{MybmmModule, Transport, jk_init, jk_new, jk_open, jk_read, jk_close, jk_control, MYBMM_CHARGE_CONTROL, MYBMM_DISCHARGE_CONTROL, MYBMM_BALANCE_CONTROL};
 pub use jk_info::{JkInfo, parse_info_strings};
