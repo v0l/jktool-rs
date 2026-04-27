@@ -30,7 +30,7 @@ jobs:
 
       - name: List built binaries
         run: |
-          ls -la ./output/
+          find ./output -type f -name "jktool" -exec ls -lh {} \;
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

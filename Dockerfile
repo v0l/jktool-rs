@@ -25,6 +25,12 @@ COPY src/ ./src/
 # Build (without static linking due to proc-macro incompatibility)
 RUN cargo build --release --features bluetooth
 
-# Extract the binary
+# Copy only the binary to a minimal output directory
 RUN mkdir -p /output && \
     cp /build/target/release/jktool /output/
+
+FROM scratch
+
+COPY --from=builder /output/jktool /jktool
+
+ENTRYPOINT ["/jktool"]
